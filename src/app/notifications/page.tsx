@@ -7,7 +7,7 @@ type Notification = {
   id: string;
   title: string;
   message: string;
-  category: "Booking" | "Inventory" | "Event" | "System";
+  category: "Booking" | "Inventory" | "Event" | "Payment" | "System";
   createdAt: string;
   read: boolean;
 };
@@ -26,6 +26,10 @@ type HotelEvent = {
   venue: string;
   status: string;
 };
+
+type RoomRecord = { number: string; price: number };
+type PaymentHistoryEntry = { id?: string; amount: number; method?: string; date?: string };
+type BookingPayment = { bookingId: string; paidAmount: number; history?: PaymentHistoryEntry[] };
 
 const STORAGE_KEY = "celebrations-hotel-notifications";
 
@@ -197,6 +201,36 @@ export default function NotificationsPage() {
         });
       });
 
+    // Payment alerts use the same localStorage keys as the Payments module.
+    const rooms = readJSON<RoomRecord[]>("celebrations-hotel-rooms", []);
+    const paymentLedger = readJSON<Record<string, BookingPayment>>(
+      "celebrations-hotel-payments",
+      {},
+    );
+    bookings
+      .filter((booking) => booking.status !== "Cancelled")
+      .forEach((booking) => {
+        const room = rooms.find((item) => item.number === booking.room);
+        const start = new Date(`${booking.checkIn}T00:00:00`).getTime();
+        const end = new Date(`${booking.checkOut}T00:00:00`).getTime();
+        const nights = Number.isFinite(start) && Number.isFinite(end) && end > start
+          ? Math.max(1, Math.ceil((end - start) / 86400000))
+          : 1;
+        const total = Math.max(0, Number(room?.price ?? 0)) * nights;
+        const paid = Math.max(0, Number(paymentLedger[booking.id]?.paidAmount ?? 0));
+        const balance = Math.max(0, total - paid);
+        if (total > 0 && balance > 0) {
+          newAlerts.push({
+            id: makeId(),
+            title: paid > 0 ? "Booking Payment Balance Due" : "Booking Payment Pending",
+            message: `${booking.guest} — Booking ${booking.id}, Room ${booking.room}: estimated bill ₹${total.toLocaleString("en-IN")}, paid ₹${Math.min(paid, total).toLocaleString("en-IN")}, balance ₹${balance.toLocaleString("en-IN")}.`,
+            category: "Payment",
+            createdAt: new Date().toISOString(),
+            read: false,
+          });
+        }
+      });
+
     events
       .filter((event) => event.status === "Confirmed")
       .forEach((event) => {
@@ -220,7 +254,7 @@ export default function NotificationsPage() {
     if (newAlerts.length === 0) {
       addNotification(
         "No New Operational Alerts",
-        "No upcoming arrivals, low-stock items or confirmed events in the next three days were found.",
+        "No upcoming arrivals, low-stock items, unpaid room balances or confirmed events in the next three days were found.",
         "System",
       );
       return;
@@ -245,6 +279,7 @@ export default function NotificationsPage() {
 
   const categoryStyle: Record<string, string> = {
     Booking: "bg-blue-100 text-blue-700",
+    Payment: "bg-emerald-100 text-emerald-700",
     Inventory: "bg-amber-100 text-amber-700",
     Event: "bg-purple-100 text-purple-700",
     System: "bg-gray-100 text-gray-700",
@@ -256,7 +291,7 @@ export default function NotificationsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Notifications</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Hotel bookings, inventory aur events ke important alerts.
+            Hotel bookings, payment balances, inventory aur events ke important alerts.
           </p>
         </div>
 
@@ -366,7 +401,9 @@ export default function NotificationsPage() {
                   >
                     {item.category === "Booking"
                       ? "📅"
-                      : item.category === "Inventory"
+                      : item.category === "Payment"
+                        ? "💳"
+                        : item.category === "Inventory"
                         ? "📦"
                         : item.category === "Event"
                           ? "🎉"
@@ -440,8 +477,7 @@ export default function NotificationsPage() {
 
       <p className="text-xs leading-5 text-gray-500">
         Notifications isi browser ke localStorage mein save hoti hain.
-        Operational alerts generate karne ke liye “Check Operational Alerts”
-        click karein; ye automatic background alerts nahi hain.
+        Payment alerts estimated room charges aur recorded payments par based hain. Operational alerts generate karne ke liye “Check Operational Alerts” click karein; ye automatic background alerts nahi hain.
       </p>
     </main>
   );

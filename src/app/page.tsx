@@ -1,9 +1,11 @@
 "use client";
-
+import DashboardAlerts from "@/components/DashboardAlerts";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useBookings } from "@/components/BookingStorage";
-
+import RoomSync from "@/components/RoomSync";
+import HotelAnalytics from "@/components/HotelAnalytics";
+import HousekeepingSync from "@/components/HousekeepingSync";
 type Room = {
   number: string;
   type: string;
@@ -31,6 +33,19 @@ type EventItem = {
 type Settings = {
   propertyName?: string;
   city?: string;
+};
+
+type PaymentEntry = { id: string; amount: number; method: string; date: string; note: string };
+type BookingPayment = { bookingId: string; paidAmount: number; history: PaymentEntry[] };
+
+type POSOrder = {
+  id?: string;
+  total?: number;
+  grandTotal?: number;
+  amount?: number;
+  createdAt?: string;
+  date?: string;
+  status?: string;
 };
 
 const DEFAULT_ROOMS: Room[] = [
@@ -82,6 +97,8 @@ export default function DashboardPage() {
   const [rooms, setRooms] = useState<Room[]>(DEFAULT_ROOMS);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [posOrders, setPosOrders] = useState<POSOrder[]>([]);
+  const [paymentLedger, setPaymentLedger] = useState<Record<string, BookingPayment>>({});
   const [propertyName, setPropertyName] = useState(
     "Celebrations Hotel & Resort"
   );
@@ -107,6 +124,14 @@ export default function DashboardPage() {
 
     setEvents(
       readStorage<EventItem[]>("celebrations-hotel-events", [])
+    );
+
+    setPosOrders(
+      readStorage<POSOrder[]>("celebrations-hotel-pos-orders", [])
+    );
+
+    setPaymentLedger(
+      readStorage<Record<string, BookingPayment>>("celebrations-hotel-payments", {})
     );
 
     const settings = readStorage<Settings>(
@@ -191,6 +216,47 @@ export default function DashboardPage() {
     }, 0);
   }, [activeBookings, rooms, today]);
 
+  const currentMonth = today.slice(0, 7);
+
+  const monthlyBookings = activeBookings.filter(
+    (booking) => booking.checkIn?.startsWith(currentMonth)
+  ).length;
+
+  const paymentSummary = useMemo(() => {
+    return activeBookings.reduce((summary, booking) => {
+      const room = rooms.find((item) => item.number === booking.room);
+      const start = new Date(`${booking.checkIn}T00:00:00`).getTime();
+      const end = new Date(`${booking.checkOut}T00:00:00`).getTime();
+      const nights = Number.isFinite(start) && Number.isFinite(end) && end > start
+        ? Math.max(1, Math.ceil((end - start) / 86400000))
+        : 1;
+      const total = (room?.price ?? 0) * nights;
+      const payment = paymentLedger[booking.id];
+      const paid = Math.max(0, Number(payment?.paidAmount ?? 0));
+      summary.totalBilled += total;
+      summary.collected += paid;
+      summary.balance += Math.max(0, total - paid);
+      if (total > paid) summary.pendingBookings += 1;
+      return summary;
+    }, { totalBilled: 0, collected: 0, balance: 0, pendingBookings: 0 });
+  }, [activeBookings, rooms, paymentLedger]);
+
+  const posRevenue = posOrders.reduce((total, order) => {
+    const orderDate = order.createdAt ?? order.date ?? "";
+    const status = (order.status ?? "").toLowerCase();
+
+    if (
+      !orderDate.startsWith(currentMonth) ||
+      status === "cancelled" ||
+      status === "canceled"
+    ) {
+      return total;
+    }
+
+    const amount = Number(order.grandTotal ?? order.total ?? order.amount ?? 0);
+    return total + (Number.isFinite(amount) ? amount : 0);
+  }, 0);
+
   const lowStockItems = inventory.filter(
     (item) => item.quantity <= item.minStock
   );
@@ -237,8 +303,10 @@ export default function DashboardPage() {
   ];
 
   return (
+    
     <div className="space-y-6">
       {/* Welcome */}
+      <RoomSync />
       <section className="flex flex-col justify-between gap-4 rounded-2xl bg-gradient-to-r from-slate-900 to-slate-700 p-6 text-white sm:flex-row sm:items-center">
         <div>
           <p className="text-sm text-slate-300">
@@ -261,7 +329,7 @@ export default function DashboardPage() {
       </section>
 
       {/* KPI Cards */}
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
         <StatCard
           title="Total Rooms"
           value={roomStats.total}
@@ -276,7 +344,7 @@ export default function DashboardPage() {
           detail={`${todayCheckIns} check-ins today`}
           icon="📅"
           color="purple"
-        />
+          />
 
         <StatCard
           title="Unique Guests"
@@ -293,6 +361,41 @@ export default function DashboardPage() {
           icon="💰"
           color="orange"
         />
+        <StatCard
+          title="POS Revenue This Month"
+          value={money(posRevenue)}
+          detail={`${posOrders.length} saved POS orders`}
+          icon="🍽️"
+          color="green"
+        />
+      </section>
+
+      <section className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
+        <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+          <div>
+            <p className="text-sm font-semibold text-blue-900">This Month at a Glance</p>
+            <p className="mt-1 text-sm text-blue-800">
+              {monthlyBookings} active booking{monthlyBookings === 1 ? "" : "s"} with check-in dates this month · {money(posRevenue)} POS revenue recorded
+            </p>
+          </div>
+          <Link
+            href="/reports"
+            className="inline-flex w-fit items-center rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-800"
+          >
+            Open Reports →
+          </Link>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard title="Room Bills (Estimated)" value={money(paymentSummary.totalBilled)} detail="Active bookings at current room rates" icon="🧾" color="blue" />
+        <StatCard title="Payments Collected" value={money(paymentSummary.collected)} detail="Recorded in the payment ledger" icon="💳" color="green" />
+        <StatCard title="Pending Balance" value={money(paymentSummary.balance)} detail={`${paymentSummary.pendingBookings} booking(s) with a balance`} icon="⏳" color="orange" />
+        <div className="flex flex-col justify-center rounded-2xl border border-indigo-100 bg-indigo-50 p-5">
+          <p className="text-sm font-semibold text-indigo-900">Manage Payments</p>
+          <p className="mt-1 text-xs text-indigo-700">Review balances and record collections.</p>
+          <Link href="/payments" className="mt-4 inline-flex w-fit rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800">Open Payments →</Link>
+        </div>
       </section>
 
       {/* Occupancy + Room Status */}
@@ -340,7 +443,7 @@ export default function DashboardPage() {
                 label="Occupied"
                 count={roomStats.occupied}
                 color="bg-blue-600"
-              />
+                />
               <RoomLegend
                 label="Available"
                 count={roomStats.available}
@@ -510,7 +613,7 @@ export default function DashboardPage() {
                 Items at or below minimum stock
               </p>
             </div>
-
+            <DashboardAlerts />
             <Link
               href="/inventory"
               className="text-sm font-semibold text-blue-600 hover:text-blue-800"
@@ -635,6 +738,8 @@ export default function DashboardPage() {
           </table>
         </div>
       </section>
+        <HotelAnalytics />
+        <HousekeepingSync />
 
       <footer className="pb-2 text-center text-xs text-slate-400">
         {propertyName} · Dashboard · Data stored in this browser

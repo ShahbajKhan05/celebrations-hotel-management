@@ -6,15 +6,26 @@ import { usePathname } from "next/navigation";
 const navigation = [
   { label: "Dashboard", path: "/", icon: "▦" },
   { label: "Rooms", path: "/rooms", icon: "⌂" },
+  { label: "Room Service", path: "/room-service", icon: "🍽️" },
   { label: "Bookings", path: "/bookings", icon: "▤" },
+  { label: "Booking Calendar", path: "/booking-calendar", icon: "📅" },
+  { label: "Check-In / Check-Out", path: "/check-in-out", icon: "🛎️" },
   { label: "Guests", path: "/guests", icon: "♙" },
+  { label: "Guest Invoices", path: "/invoices", icon: "🧾" },
+  { label: "Guest Feedback", path: "/feedback", icon: "⭐" },
+  { label: "Payments & Balances", path: "/payments", icon: "₹" },
   { label: "Restaurant POS", path: "/pos", icon: "♨" },
+  { label: "Kitchen Display", path: "/kitchen-display", icon: "🍳" },
   { label: "Inventory", path: "/inventory", icon: "▣" },
   { label: "Events & Banquets", path: "/events", icon: "✧" },
   { label: "Staff", path: "/staff", icon: "♧" },
+  { label: "Housekeeping", path: "/housekeeping", icon: "🧹" },
+  { label: "Housekeeping Dashboard", path: "/housekeeping-dashboard", icon: "🧹" },
+  { label: "Maintenance", path: "/maintenance", icon: "🔧" },
   { label: "Reports", path: "/reports", icon: "▥" },
   { label: "Notifications", path: "/notifications", icon: "♢" },
   { label: "Settings", path: "/settings", icon: "⚙" },
+  { label: "Backup & Restore", path: "/backup", icon: "💾" },
 ];
 
 type SidebarProps = {

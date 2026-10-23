@@ -52,6 +52,9 @@ type PosOrder = {
 };
 
 const POS_STORAGE_KEY = "celebrations-hotel-pos-orders";
+const PAYMENT_STORAGE_KEY = "celebrations-hotel-payments";
+type PaymentEntry = { id: string; amount: number; method: string; date: string; note?: string };
+type BookingPayment = { bookingId: string; paidAmount: number; history: PaymentEntry[] };
 
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -136,6 +139,7 @@ export default function ReportsPage() {
   const [events, setEvents] = useState<HotelEvent[]>([]);
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [orders, setOrders] = useState<PosOrder[]>([]);
+  const [payments, setPayments] = useState<Record<string, BookingPayment>>({});
   const [period, setPeriod] = useState("month");
   const [dataLoaded, setDataLoaded] = useState(false);
 
@@ -145,6 +149,7 @@ export default function ReportsPage() {
     setEvents(readStorage<HotelEvent[]>("celebrations-hotel-events", []));
     setStaff(readStorage<StaffMember[]>("celebrations-hotel-staff", []));
     setOrders(readStorage<PosOrder[]>(POS_STORAGE_KEY, []));
+    setPayments(readStorage<Record<string, BookingPayment>>(PAYMENT_STORAGE_KEY, {}));
     setDataLoaded(true);
   }, []);
 
@@ -190,6 +195,33 @@ export default function ReportsPage() {
 
   const totalRevenue = bookingRevenue + posRevenue;
 
+  const paymentHistory = Object.values(payments).flatMap((payment) =>
+    (Array.isArray(payment.history) ? payment.history : []).map((entry) => ({
+      ...entry,
+      bookingId: payment.bookingId,
+    })),
+  );
+  const filteredPaymentHistory = paymentHistory.filter((entry) => inPeriod(entry.date, period));
+  const paymentsCollected = filteredPaymentHistory.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0);
+  const paymentMethodTotals = filteredPaymentHistory.reduce<Record<string, number>>((totals, entry) => {
+    const method = entry.method || "Other";
+    totals[method] = (totals[method] || 0) + (Number(entry.amount) || 0);
+    return totals;
+  }, {});
+  const paymentBalances = activeBookings.map((booking) => {
+    const room = rooms.find((item) => item.number === booking.room);
+    const nights = Math.max(1, Math.ceil((new Date(`${booking.checkOut}T00:00:00`).getTime() - new Date(`${booking.checkIn}T00:00:00`).getTime()) / 86400000) || 1);
+    const total = Math.max(0, Number(room?.price ?? 0)) * nights;
+    const paid = Math.min(total, Math.max(0, Number(payments[booking.id]?.paidAmount ?? 0)));
+    return { booking, total, paid, balance: Math.max(0, total - paid), status: paid <= 0 ? "Unpaid" : paid >= total ? "Paid" : "Partial" };
+  }).filter((row) => inPeriod(row.booking.checkIn, period));
+  const paymentDue = paymentBalances.reduce((sum, row) => sum + row.total, 0);
+  const paymentPaidForBookings = paymentBalances.reduce((sum, row) => sum + row.paid, 0);
+  const paymentPending = paymentBalances.reduce((sum, row) => sum + row.balance, 0);
+  const unpaidCount = paymentBalances.filter((row) => row.status === "Unpaid").length;
+  const partialCount = paymentBalances.filter((row) => row.status === "Partial").length;
+  const paidCount = paymentBalances.filter((row) => row.status === "Paid").length;
+
   const lowStockItems = inventory.filter(
     (item) => item.quantity <= (item.minStock ?? 0),
   );
@@ -231,6 +263,21 @@ export default function ReportsPage() {
       ["POS Orders in Selected Period", filteredOrders.length],
       ["POS Revenue in Selected Period", posRevenue],
       ["Combined Estimated Revenue", totalRevenue],
+      ["Payments Collected in Selected Period", paymentsCollected],
+      ["Booking Amount Estimate in Selected Period", paymentDue],
+      ["Paid Against Selected Bookings", paymentPaidForBookings],
+      ["Pending Booking Balance (estimate)", paymentPending],
+      ["Unpaid Bookings", unpaidCount],
+      ["Partially Paid Bookings", partialCount],
+      ["Fully Paid Bookings", paidCount],
+      [],
+      ["PAYMENT METHOD SUMMARY"],
+      ["Payment Method", "Collected"],
+      ...Object.entries(paymentMethodTotals).map(([method, amount]) => [method, amount] as (string | number)[]),
+      [],
+      ["PAYMENT HISTORY"],
+      ["Payment ID", "Booking ID", "Date", "Amount", "Method", "Note"],
+      ...filteredPaymentHistory.map((entry) => [entry.id, entry.bookingId, entry.date, entry.amount, entry.method, entry.note ?? ""]),
       [],
       ["INVENTORY"],
       ["Item", "Category", "Quantity", "Unit", "Minimum Stock", "Stock Status"],
@@ -324,6 +371,18 @@ export default function ReportsPage() {
       icon: "💰",
     },
     {
+      title: "Payments Collected",
+      value: money(paymentsCollected),
+      detail: `${filteredPaymentHistory.length} payment entries in selected period`,
+      icon: "💳",
+    },
+    {
+      title: "Pending Balance",
+      value: money(paymentPending),
+      detail: `${unpaidCount} unpaid · ${partialCount} partially paid bookings`,
+      icon: "⏳",
+    },
+    {
       title: "Low Stock Items",
       value: String(lowStockItems.length),
       detail: `${outOfStockItems.length} items out of stock`,
@@ -367,6 +426,18 @@ export default function ReportsPage() {
       value: money(posRevenue),
       description: `${filteredOrders.length} non-cancelled orders`,
       type: "POS",
+    },
+    {
+      name: "Payments Collected",
+      value: money(paymentsCollected),
+      description: `${filteredPaymentHistory.length} payment entries by payment date`,
+      type: "Payments",
+    },
+    {
+      name: "Pending Booking Balance",
+      value: money(paymentPending),
+      description: `${unpaidCount} unpaid and ${partialCount} partially paid bookings (estimated)`,
+      type: "Payments",
     },
     {
       name: "Confirmed Events",
@@ -642,6 +713,29 @@ export default function ReportsPage() {
             </table>
           </div>
         )}
+      </section>
+
+      <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
+        <div className="flex flex-col gap-3 border-b border-gray-100 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-bold text-gray-900">Payments & Balances</h2>
+            <p className="mt-1 text-sm text-gray-500">Recorded payments, payment methods, and estimated outstanding balances.</p>
+          </div>
+          <a href="/payments" className="inline-flex w-fit rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">Open Payments →</a>
+        </div>
+        <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-3">
+          <div className="rounded-xl bg-emerald-50 p-4"><p className="text-sm text-emerald-700">Collected in Period</p><p className="mt-1 text-xl font-bold text-emerald-800">{money(paymentsCollected)}</p></div>
+          <div className="rounded-xl bg-blue-50 p-4"><p className="text-sm text-blue-700">Paid Against Selected Bookings</p><p className="mt-1 text-xl font-bold text-blue-800">{money(paymentPaidForBookings)}</p></div>
+          <div className="rounded-xl bg-amber-50 p-4"><p className="text-sm text-amber-700">Estimated Pending Balance</p><p className="mt-1 text-xl font-bold text-amber-800">{money(paymentPending)}</p></div>
+        </div>
+        <div className="border-t border-gray-100 p-5">
+          <h3 className="font-semibold text-gray-900">Payment Methods</h3>
+          {Object.keys(paymentMethodTotals).length === 0 ? <p className="mt-3 text-sm text-gray-500">Selected period mein payment history nahi mili.</p> : <div className="mt-3 flex flex-wrap gap-2">{Object.entries(paymentMethodTotals).map(([method, amount]) => <span key={method} className="rounded-full bg-gray-100 px-3 py-2 text-sm text-gray-700">{method}: <strong>{money(amount)}</strong></span>)}</div>}
+        </div>
+        <div className="border-t border-gray-100 p-5">
+          <h3 className="font-semibold text-gray-900">Payment History</h3>
+          {filteredPaymentHistory.length === 0 ? <p className="mt-3 text-sm text-gray-500">Is period mein koi recorded payment nahi hai.</p> : <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[600px] text-left text-sm"><thead className="bg-gray-50 text-xs uppercase text-gray-500"><tr><th className="px-4 py-3">Payment ID</th><th className="px-4 py-3">Booking ID</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Method</th><th className="px-4 py-3 text-right">Amount</th></tr></thead><tbody className="divide-y divide-gray-100">{filteredPaymentHistory.map((entry, index) => <tr key={`${entry.id}-${index}`}><td className="px-4 py-3 font-medium text-blue-700">{entry.id}</td><td className="px-4 py-3">{entry.bookingId}</td><td className="px-4 py-3">{entry.date}</td><td className="px-4 py-3">{entry.method}</td><td className="px-4 py-3 text-right font-semibold">{money(Number(entry.amount) || 0)}</td></tr>)}</tbody></table></div>}
+        </div>
       </section>
 
       <p className="text-xs leading-5 text-gray-500">
